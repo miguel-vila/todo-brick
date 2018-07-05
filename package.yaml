@@ -33,6 +33,7 @@ library:
   - microlens-th
   - vty
   - vector
+  - safe
 
 executables:
   brick-poc-exe:
