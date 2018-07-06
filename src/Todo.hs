@@ -13,6 +13,7 @@ import Data.Maybe (fromMaybe)
 import qualified Graphics.Vty as V
 
 import qualified Data.Vector as Vec
+import qualified Data.Text.Zipper as Tz
 import qualified Brick.Main as M
 import qualified Brick.Types as T
 import qualified Brick.Widgets.Border as B
@@ -86,14 +87,18 @@ drawUI st = [ui]
              vLimit 15 $
              content
 
-insertTodo :: TodoItem -> State -> State
-insertTodo todo st = st & todos %~ (L.listInsert 0 todo)
+insertTodoFromEditor :: State -> State
+insertTodoFromEditor st = 
+    let todo = unlines $ E.getEditContents (st^.editTodo)
+    in st & todos                     %~ (L.listInsert 0 todo)
+          & (todos . L.listSelectedL) %~ (const $ Just 0) -- select the top one after adding
+          & editTodo                  %~ (E.applyEdit Tz.clearZipper)
 
 appEvent :: State -> T.BrickEvent Name e -> T.EventM Name (T.Next State)
 appEvent st (T.VtyEvent e) =
     case e of
         V.EvKey V.KEnter [] -> 
-            let st' = if editorOpened st then insertTodo (unlines $ E.getEditContents (st^.editTodo)) st else st 
+            let st' = if editorOpened st then insertTodoFromEditor st else st 
             in  M.continue $ st' & focusRing %~ F.focusNext
         V.EvKey V.KEsc []   -> M.halt st
         ev -> M.continue =<< case F.focusGetCurrent (st^.focusRing) of

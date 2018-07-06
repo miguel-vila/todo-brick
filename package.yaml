@@ -8,13 +8,14 @@ library:
   ghc-options:
     - -threaded
   dependencies:
-  - brick
-  - text
-  - microlens
-  - microlens-th
-  - vty
-  - vector
-  - safe
+    - brick
+    - text
+    - microlens
+    - microlens-th
+    - vty
+    - vector
+    - safe
+    - text-zipper
 
 executables:
   todo:
