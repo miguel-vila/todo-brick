@@ -39,14 +39,19 @@ import Data.Text(Text)
 import Safe(headMay)
 
 data Name = Todos
+          | DoneTodos
           | Edit
           deriving (Ord, Show, Eq)
 
 type TodoItem = String
 
+type Index = Int
+
 data State = State { _todos        :: L.List Name TodoItem
+                   , _doneTodos    :: L.List Name TodoItem
                    , _editTodo     :: E.Editor String Name
                    , _focusRing    :: F.FocusRing Name
+                   , _editingTodo  :: Bool
                    } 
 
 makeLenses ''State
@@ -54,10 +59,15 @@ makeLenses ''State
 initialTodos :: [TodoItem]
 initialTodos = ["foo","bar"]
 
+createEditor :: String -> E.Editor String Name
+createEditor = E.editor Edit (Just 1)
+
 initialState :: State
 initialState = State (L.list Todos (Vec.fromList initialTodos) 1)
-                     (E.editor Edit Nothing "")
+                     (L.list DoneTodos Vec.empty 1)
+                     (createEditor "")
                      (F.focusRing [Todos, Edit])
+                     False
 
 listDrawElement :: Bool -> TodoItem -> Widget Name
 listDrawElement sel a =
@@ -72,40 +82,82 @@ selectedItem st = snd <$> L.listSelectedElement (st^.todos)
 editorOpened :: State -> Bool
 editorOpened st = F.focusGetCurrent (st^.focusRing) == Just Edit
 
+centeredText :: String -> Widget a
+centeredText = C.hCenter . str
+
+instrs :: [ Widget a ]
+instrs = centeredText <$> 
+        [ "Press Enter to add a new todo."
+        , "Press x to mark a todo as done."
+        , "Press e to edit a todo."
+        , "Press d to delete a todo."
+        , "Press Esc to exit."
+        ]
+
 drawUI :: State -> [Widget Name]
 drawUI st = [ui]
     where
         todosW = F.withFocusRing (st^.focusRing) (L.renderList listDrawElement) (st^.todos)
         render lines = txt $ mconcat lines
         edit = F.withFocusRing (st^.focusRing) (E.renderEditor (str . unlines)) (st^.editTodo)
-        content = C.vCenter $ vBox [ if editorOpened st then edit else todosW
-                                   , C.hCenter $ str "Press Esc to exit."
-                                   , C.hCenter $ str (maybe "NO" id (selectedItem st))
-                                   ]
+        content = C.vCenter $ vBox $ [ if editorOpened st then edit else todosW
+                                     , centeredText (maybe "" id (selectedItem st))
+                                     ] ++ instrs
         ui = B.borderWithLabel (str "TODOS") $
-             hLimit 25 $
-             vLimit 15 $
+             hLimit 35 $
+             vLimit 25 $
              content
 
 insertTodoFromEditor :: State -> State
 insertTodoFromEditor st = 
     let todo = unlines $ E.getEditContents (st^.editTodo)
     in st & todos                     %~ (L.listInsert 0 todo)
-          & (todos . L.listSelectedL) %~ (const $ Just 0) -- select the top one after adding
+          & (todos . L.listSelectedL) .~ (Just 0) -- select the top one after adding
           & editTodo                  %~ (E.applyEdit Tz.clearZipper)
 
+markSelectedAsDone :: State -> State
+markSelectedAsDone st = maybe st insertIntoDoneList (selectedItem st)
+    where selectedItem st =
+            L.listSelectedElement (st^.todos)
+          insertIntoDoneList (index,todo) =
+            st & doneTodos %~ (L.listInsert 0 todo)
+               &     todos %~ (L.listRemove index )
+
+applyEditsToSelectedTodo :: State -> State
+applyEditsToSelectedTodo st =
+    let editedTodo = unlines $ E.getEditContents (st^.editTodo)
+    in  st & todos %~ (L.listModify (const editedTodo))
+
 appEvent :: State -> T.BrickEvent Name e -> T.EventM Name (T.Next State)
-appEvent st (T.VtyEvent e) =
-    case e of
-        V.EvKey V.KEnter [] -> 
-            let st' = if editorOpened st then insertTodoFromEditor st else st 
-            in  M.continue $ st' & focusRing %~ F.focusNext
-        V.EvKey V.KEsc []   -> M.halt st
-        ev -> M.continue =<< case F.focusGetCurrent (st^.focusRing) of
+appEvent st (T.VtyEvent ev) =
+    case (ev, F.focusGetCurrent (st^.focusRing)) of
+        (V.EvKey V.KEnter [], Just Todos) -> 
+            M.continue $ st & focusRing %~ (F.focusSetCurrent Edit) 
+                            & editTodo  .~ (createEditor "")
+        (V.EvKey V.KEnter [], Just Edit ) -> 
+            let st' = case (st^.editingTodo) of
+                        True  -> applyEditsToSelectedTodo st 
+                        False -> insertTodoFromEditor st
+            in  M.continue $ st' & focusRing %~ (F.focusSetCurrent Todos)
+        (V.EvKey (V.KChar 'x') [], Just Todos) ->
+            M.continue $ markSelectedAsDone st
+        (V.EvKey (V.KChar 'e') [], Just Todos) ->
+            M.continue $ maybe st openEditor (selectedItem st)
+            where selectedItem st =
+                    L.listSelectedElement (st^.todos)
+                  openEditor (index,todo) =
+                    st & editingTodo .~ True
+                       & editTodo    .~ (createEditor todo)
+                       & focusRing   %~ (F.focusSetCurrent Edit)
+        (V.EvKey V.KEsc [], _           ) -> M.halt st
+        _                         ->
+            M.continue =<< case F.focusGetCurrent (st^.focusRing) of
                 Just Todos -> T.handleEventLensed st todos    L.handleListEvent   ev
                 Just Edit  -> T.handleEventLensed st editTodo E.handleEditorEvent ev
-                Nothing    -> return st
-                
+                Nothing    -> return st                
+appEvent st ev =
+    M.continue st
+
 
 customAttr :: A.AttrName
 customAttr = L.listSelectedAttr <> "custom"
