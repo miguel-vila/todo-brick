@@ -72,9 +72,9 @@ initialState = State (L.list Todos (Vec.fromList initialTodos) 1)
 
 listDrawElement :: Bool -> TodoItem -> Widget Name
 listDrawElement sel a =
-    let selStr s = case sel of
-                    True  -> withAttr customAttr (str s)
-                    False -> str s  
+    let selStr = case sel of
+                    True  -> (withAttr customAttr) . str
+                    False -> str
     in C.hCenter $ selStr a
 
 selectedItem :: State -> Maybe TodoItem 
@@ -156,6 +156,14 @@ appEvent st (T.VtyEvent ev) =
                        & focusRing   %~ (F.focusSetCurrent Edit)
         (V.EvKey (V.KChar 'i') [], Just Todos ) -> 
             M.continue $ st & focusRing %~ (F.focusSetCurrent Instructions) 
+        (V.EvKey (V.KChar 'd') [], Just Todos) ->
+            M.continue $ maybe st deleteItem (selectedItem st)
+            where selectedItem st =
+                    L.listSelectedElement (st^.todos)
+                  deleteItem (index,_) =
+                    st & todos %~ (L.listRemove index)
+        -- *V.EvKey (V.KChar 'a' [], Just Todos) ->
+        --     M.continue
         (V.EvKey V.KEsc [], _           ) -> M.halt st
         _                         ->
             M.continue =<< case F.focusGetCurrent (st^.focusRing) of
