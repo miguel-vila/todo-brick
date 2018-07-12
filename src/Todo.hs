@@ -41,6 +41,7 @@ import Safe(headMay)
 data Name = Todos
           | DoneTodos
           | Edit
+          | Instructions
           deriving (Ord, Show, Eq)
 
 type TodoItem = String
@@ -97,16 +98,20 @@ instrs = centeredText <$>
 drawUI :: State -> [Widget Name]
 drawUI st = [ui]
     where
-        todosW = F.withFocusRing (st^.focusRing) (L.renderList listDrawElement) (st^.todos)
+        todosWidget = F.withFocusRing (st^.focusRing) (L.renderList listDrawElement)
         render lines = txt $ mconcat lines
         edit = F.withFocusRing (st^.focusRing) (E.renderEditor (str . unlines)) (st^.editTodo)
-        content = C.vCenter $ vBox $ [ if editorOpened st then edit else todosW
-                                     , centeredText (maybe "" id (selectedItem st))
-                                     ] ++ instrs
+        centerContent = case F.focusGetCurrent (st^.focusRing) of
+            Just Todos -> todosWidget (st^.todos)
+            Nothing    -> todosWidget (st^.todos)
+            Just DoneTodos       -> todosWidget (st^.doneTodos)
+            Just Edit            -> edit
+            Just Instructions    -> C.vCenter $ vBox instrs
+        content = C.vCenter $ vBox $ [ centerContent , centeredText "Press i to see the instructions" ] 
         ui = B.borderWithLabel (str "TODOS") $
-             hLimit 35 $
-             vLimit 25 $
-             content
+                hLimit 35 $
+                vLimit 25 $
+                content
 
 insertTodoFromEditor :: State -> State
 insertTodoFromEditor st = 
@@ -149,6 +154,8 @@ appEvent st (T.VtyEvent ev) =
                     st & editingTodo .~ True
                        & editTodo    .~ (createEditor todo)
                        & focusRing   %~ (F.focusSetCurrent Edit)
+        (V.EvKey (V.KChar 'i') [], Just Todos ) -> 
+            M.continue $ st & focusRing %~ (F.focusSetCurrent Instructions) 
         (V.EvKey V.KEsc [], _           ) -> M.halt st
         _                         ->
             M.continue =<< case F.focusGetCurrent (st^.focusRing) of
