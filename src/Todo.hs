@@ -12,6 +12,8 @@ import Data.Monoid
 import Data.Maybe (fromMaybe)
 import qualified Graphics.Vty as V
 
+import Control.Monad.IO.Class
+
 import qualified Data.Vector as Vec
 import qualified Data.Text.Zipper as Tz
 import qualified Brick.Main as M
@@ -53,6 +55,7 @@ data State = State { _todos        :: L.List Name TodoItem
                    , _editTodo     :: E.Editor String Name
                    , _focusRing    :: F.FocusRing Name
                    , _editingTodo  :: Bool
+                   , _lastFocus    :: Name
                    } 
 
 makeLenses ''State
@@ -67,8 +70,9 @@ initialState :: State
 initialState = State (L.list Todos (Vec.fromList initialTodos) 1)
                      (L.list DoneTodos Vec.empty 1)
                      (createEditor "")
-                     (F.focusRing [Todos, Edit])
+                     (F.focusRing [Todos, Edit, DoneTodos, Instructions])
                      False
+                     Todos
 
 listDrawElement :: Bool -> TodoItem -> Widget Name
 listDrawElement sel a =
@@ -92,7 +96,7 @@ instrs = centeredText <$>
         , "Press x to mark a todo as done."
         , "Press e to edit a todo."
         , "Press d to delete a todo."
-        , "Press Esc to exit."
+        , "Press i to exit this menu."
         ]
 
 drawUI :: State -> [Widget Name]
@@ -105,9 +109,17 @@ drawUI st = [ui]
             Just Todos -> todosWidget (st^.todos)
             Nothing    -> todosWidget (st^.todos)
             Just DoneTodos       -> todosWidget (st^.doneTodos)
-            Just Edit            -> edit
             Just Instructions    -> C.vCenter $ vBox instrs
-        content = C.vCenter $ vBox $ [ centerContent , centeredText "Press i to see the instructions" ] 
+            Just Edit            -> edit
+        footerElems = case F.focusGetCurrent (st^.focusRing) of 
+                        Just Edit         -> [ centeredText "Press Enter when you are done"   ]
+                        Just Instructions -> [] 
+                        Just Todos        -> 
+                            case Vec.null (st^.(todos.(L.listElementsL))) of
+                                True  -> [ centeredText "Press Enter to create a new todo" ]
+                                False -> [ centeredText "Press i to see the instructions" ]
+                        _                 -> [ centeredText "Press i to see the instructions" ] 
+        content = C.vCenter $ vBox $ centerContent : footerElems 
         ui = B.borderWithLabel (str "TODOS") $
                 hLimit 35 $
                 vLimit 25 $
@@ -121,8 +133,8 @@ insertTodoFromEditor st =
           & editTodo                  %~ (E.applyEdit Tz.clearZipper)
 
 markSelectedAsDone :: State -> State
-markSelectedAsDone st = maybe st insertIntoDoneList (selectedItem st)
-    where selectedItem st =
+markSelectedAsDone st = maybe st insertIntoDoneList selectedItem
+    where selectedItem =
             L.listSelectedElement (st^.todos)
           insertIntoDoneList (index,todo) =
             st & doneTodos %~ (L.listInsert 0 todo)
@@ -153,9 +165,13 @@ appEvent st (T.VtyEvent ev) =
                   openEditor (index,todo) =
                     st & editingTodo .~ True
                        & editTodo    .~ (createEditor todo)
+                       & editTodo    %~ (E.applyEdit Tz.gotoEOL) -- @TODO there are two mods on `editTodo` is there a better way?
                        & focusRing   %~ (F.focusSetCurrent Edit)
-        (V.EvKey (V.KChar 'i') [], Just Todos ) -> 
-            M.continue $ st & focusRing %~ (F.focusSetCurrent Instructions) 
+        (V.EvKey (V.KChar 'i') [], Just currentFocus) | currentFocus /= Edit -> M.continue $
+            case currentFocus of
+                Instructions -> st & focusRing %~ (F.focusSetCurrent (st^.lastFocus)) 
+                current      -> st & lastFocus .~ current
+                                   & focusRing %~ (F.focusSetCurrent Instructions)
         (V.EvKey (V.KChar 'd') [], Just Todos) ->
             M.continue $ maybe st deleteItem (selectedItem st)
             where selectedItem st =
